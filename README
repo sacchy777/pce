@@ -16,6 +16,8 @@ An PC Engine emulator written in Typescript to measure javascript performance in
 
 Open dist/index.html and drop rom onto it.
 
+https://sacchy777.github.io/pce/dist/
+
 [How to complie it]
 
 Install node.
@@ -44,7 +46,7 @@ Sound implementation
 
 [History]
 
-20190731 Initial release
+20190715 Initial release
 
 [Reference]
 
