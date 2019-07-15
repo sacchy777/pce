@@ -12,6 +12,8 @@
 
 An PC Engine emulator written in Typescript to measure javascript performance in web brower in 2019.
 
+Work in progress
+
 [How to use it]
 
 Open dist/index.html and drop rom onto it.
