@@ -1,0 +1,52 @@
+
+
+
+
+         PC Engine Emulator in Typescript
+
+
+
+
+
+[What this is]
+
+An PC Engine emulator written in Typescript to measure javascript performance in web brower in 2019.
+
+[How to use it]
+
+Open dist/index.html and drop rom onto it.
+
+[How to complie it]
+
+Install node.
+
+npm update
+
+or
+
+npm install --save typescript
+npm install --save-dev webpack webpack-cli
+npm install --save-dev ts-loader style-loader css-loader file-loader html-webpack-plugin
+npm install --save-dev webpack-dev-server
+
+, and
+
+npm run dev (for debug)
+npm run prod (for making final image in dist/ directory)
+
+
+[Todo]
+
+Debug many things
+CPU D-flag/T-flag ops 
+Screen width size other than 256px
+Sound implementation
+
+[History]
+
+20190731 Initial release
+
+[Reference]
+
+https://nodejs.org/
+https://blog.harveydelaney.com/creating-a-game-using-html5-canvas-typescript-and-webpack/

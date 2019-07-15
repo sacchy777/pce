@@ -1,0 +1,27 @@
+{
+  "name": "pce",
+  "version": "1.0.0",
+  "description": "PC Engine Emulator in Typescript",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev": "webpack-dev-server --open",
+    "prod": "webpack --production"
+  },
+  "author": "sacchy",
+  "license": "zlib",
+  "devDependencies": {
+    "css-loader": "^2.1.1",
+    "file-loader": "^3.0.1",
+    "html-webpack-plugin": "^3.2.0",
+    "style-loader": "^0.23.1",
+    "ts-loader": "^5.4.5",
+    "url-loader": "^1.1.2",
+    "webpack": "^4.30.0",
+    "webpack-cli": "^3.3.1",
+    "webpack-dev-server": "^3.3.1"
+  },
+  "dependencies": {
+    "typescript": "^3.4.5"
+  }
+}
