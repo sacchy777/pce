@@ -1,7 +1,7 @@
 const NORMALIZED_HEIGHT:number = 256;
 const NORMALIZED_WIDTH:number = 224;
 import * as Lib from "./pce";
-//import romimage from "./testrom.pce";
+
     
 type Rect = {
     x:number;
@@ -17,7 +17,7 @@ export default class Game {
     private width : number = window.innerWidth;
     private ratio : number;
     private ticks:number;
-    //    private image : HTMLImageElement;
+
     private screenbuffer:ImageData;
     private pce:Lib.System;
     static screenW = 256;
@@ -58,9 +58,6 @@ export default class Game {
 	this.fpstime = new Array<number>(Game.FPS_INTERVAL);
 	this.fpstime.fill(0);
 	this.fpsindex = 0;
-	//	this.image = <HTMLImageElement> document.createElement('img');
-	//	this.image.src = img;
-	//this.info = new Image(284,440);
 	
 	this.init();
 	this.gameinit();
@@ -102,7 +99,7 @@ export default class Game {
 
     public drawdebug(): void {
 
-	//this.drawtext("hello" + this.ticks, 100, 100);
+
 	if(!this.pce.is_ready()) {
 	    this.specfont(12, 'black');
 	    this.drawtext("drop pce rom image here", 50, 100);
@@ -111,35 +108,11 @@ export default class Game {
 	    this.drawtext("F2:debug F8:fps",50,130);
 	    this.drawtext("Z:I X:II C:RUN V:SEL Arrows:D-pad",50,140);
 	}
-	/*
-	this.ctx.fillRect((165)*this.ratio,
-			  (250)*this.ratio,
-			  (70)*this.ratio,
-			  (30)*this.ratio);
-	*/
+	
 	if(this.pce.is_ready()){
-	    
-	    /*
-	    for(let y = 0; y < 240; y ++) {
-		for(let x = 0; x < 256; x ++) {
-		    let c = this.pce.get_pixel(x+48, y+64);
-		    if(c == undefined) {
-			console.log("pixel access error "+x+"/"+y);
-			this.pce.cpu.dump();
-			this.pce.unload();
-		    }
-		    this.ctx.fillStyle = "rgb("+c.r+","+c.g+","+c.b+")";
-		    this.ctx.fillRect(x * this.ratio,
-				      y * this.ratio,
-				      this.ratio,
-				      this.ratio);
-		}
-	    }
-	    */
 	    
 	    this.pce.fill_screen(0, 8, Game.screenW, Game.screenH, this.screenbuffer.data);
 	    
-	    //this.ctx.putImageData(this.screenbuffer,0,0,Game.screenW*this.ratio, Game.screenH*this.ratio);
 	    this.tempctx.putImageData(this.screenbuffer,0,0);
 	    this.ctx.drawImage(this.tempcanvas, 0, 0, Game.screenW * this.ratio, Game.screenH * this.ratio);
 	    
@@ -176,9 +149,6 @@ export default class Game {
     public process() : void {
 	if(this.pce.is_ready()) {
 	    this.pce.run(16.6666667);
-	    //this.pce.cpu.step(10000);
-	    //	    this.pce.cpu.dump();
-	    //this.pce.unload();
 	}
     }
     

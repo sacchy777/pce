@@ -362,7 +362,7 @@ export class Pal {
 		console.log("[Pal] writing "+this.palette[this.addr].get_text() + " @"+this.addr);
 	    }
 	    
-	    this.addr = (this.addr + 1) & 0x1ff;;
+	    this.addr = (this.addr + 1) & 0x1ff;
 
 	    break;
 	default: // illegal access
@@ -463,8 +463,10 @@ export class GPU {
     vsync_interrupt:boolean;
     debug_vsync_called:number;
 
-    skip_left:number;
+    readlatch:number;
+    writelatch:number;
 
+    skip_left:number;
     
     constructor() {
 	this.memory = new Array<number>(GPU.VRAM_SIZE);
@@ -477,7 +479,7 @@ export class GPU {
 	    this.sprites[i] = new Sprite();
 	}
 
-	
+	    
 	this.vram_raddr = 0;
 	this.vram_waddr = 0;
 	this.vram_value = 0;
@@ -530,6 +532,8 @@ export class GPU {
 	this.latchh.fill(0);
 
 	this.skip_left = 0;
+	this.readlatch = 0;
+	this.writelatch = 0;
     }
 
     dump_get_text():string {
@@ -577,22 +581,26 @@ export class GPU {
 	    
 	    break;
 	case 2: // low
-
-	    ret = this.memory[this.vram_raddr];
-	    decode += "(vram read " + Util.hex(ret,4) + " @ " + Util.hex(this.vram_raddr,4) + ")";
-	    return ret & 0xff;
-
+	    if(this.iaddr == 2) {
+		return this.readlatch & 0xff;
+	    } else {
+		return this.latchl[this.iaddr];
+	    }
 	    break;
 	case 3: // high
-	    ret = this.memory[this.vram_raddr];
-	    decode += "(vram read " + Util.hex(ret,4) + " @ " + Util.hex(this.vram_raddr,4) + ")";
-	    
-	    this.vram_raddr = (this.vram_raddr + this.control_incr) & 0x7fff;
-	    if(GPU.debug) {
-		console.log(decode + "="+Util.hex(ret,4));
+	    if(this.iaddr == 2) {
+		let ret = (this.readlatch & 0xff00)>>8;
+		this.vram_raddr = this.vram_raddr + this.control_incr;
+		this.readlatch = this.memory[this.vram_raddr];
+		decode += "(vram read "+Util.hex(this.readlatch,4)+" @ "+Util.hex(this.vram_raddr,4)+")";
+		if(GPU.debug) {
+		    console.log(decode);
+		}
+		return ret;
+	    } else {
+		return this.latchh[this.iaddr];
 	    }
 	    
-	    return (ret & 0xff00)>>8;
 	    break;
 	}
 	return 0;
@@ -612,34 +620,45 @@ export class GPU {
 	case 2: // low
 	    this.datal = value;
 	    this.latchl[this.iaddr] = value;
-	    if(this.iaddr != 2 && this.iaddr != 18) this.internal_write(this.iaddr, false);
+	    //	    this.datah = 0;
+	    this.latchh[this.iaddr] = 0;
+	    this.internal_write(this.iaddr, false);
 	    break;
 	case 3: // high
 	    this.datah = value;
 	    this.latchh[this.iaddr] = value;
 	    this.internal_write(this.iaddr, true);
+	    break;
 	}
 	
     }
 
-    internal_write(addr:number, incr:boolean){
+    internal_write(addr:number, msb:boolean){
 	let decode:string = "[GPU Internal/write]";
 	//	let v = (this.datah << 8) | this.datal;
 	let v = (this.latchh[this.iaddr] << 8) | this.latchl[this.iaddr];
 	switch(this.iaddr) {
 	case 0: // write pointer
-	    this.vram_waddr = (this.datah <<8) | (this.datal);
+	    this.vram_waddr = v;
 	    break;
 	case 1: // read pointer
-	    this.vram_raddr = (this.datah <<8) | (this.datal);
-		
+	    this.vram_raddr = v;
+	    if(msb) {
+		this.readlatch = this.memory[this.vram_raddr];
+		decode += "(vram read "+Util.hex(this.readlatch,4)+" @ "+Util.hex(this.vram_raddr,4)+")";
+	    }
+	    
 	    break;
 	case 2: // vram access
-	    this.memory[this.vram_waddr] = v;
-	    decode += "(vram write "+Util.hex(v,4)+" @ "+Util.hex(this.vram_waddr,4)+")";
-		
-	    if(incr)this.vram_waddr = (this.vram_waddr + this.control_incr) & 0x7fff;
-		
+	    if(!msb) {
+		this.writelatch = (this.writelatch & 0xff00) | this.datal;
+	    } else {
+		this.writelatch = (this.writelatch & 0xff) | (this.datah<<8);
+		this.memory[this.vram_waddr] = this.writelatch;
+		decode += "(vram write "+Util.hex(this.writelatch,4)+" @ "+Util.hex(this.vram_waddr,4)+")";
+		this.vram_waddr = (this.vram_waddr + this.control_incr) & 0x7fff;
+	    }
+	    
 	    break;
 	case 5:
 	    //	    console.log(Util.hex((v),4));
@@ -743,7 +762,7 @@ export class GPU {
 	case 18:
 	    this.dma_len = v;
 	    decode += "(dma len "+this.dma_len + ")";
-	    this.dma_exec();
+	    if(msb) this.dma_exec();
 	    break;
 	case 19:
 	    this.satb_addr = v;
@@ -768,8 +787,8 @@ export class GPU {
 	let destincr = this.dcr_vdma_dest_dec == 1 ? -1 : 1;
 	for(let i = 0; i < this.dma_len; i ++) {
 	    this.memory[dest] = this.memory[src];
-	    src = src + srcincr;
-	    dest = dest + destincr;
+	    src = (src + srcincr + 0x8000)&0x7fff;
+	    dest = (dest + destincr + 0x8000)&0x7fff;
 	}
     }
     
@@ -799,11 +818,11 @@ export class GPU {
 		for(y = 0; y < 8; y ++) {
 		    // 0
 		    plane = ((tiles[y] & 0x8000)>>14) | ((tiles[y] & 0x0080)>>7) | ((tiles[y+8] & 0x8000)>>12) | ((tiles[y+8] & 0x0080)>>5);
-		    if(plane != 0) this.bitmap[pbmp_addr + 0] = palette|plane;
+		    if(plane != 0) this.bitmap[pbmp_addr + 0] = (palette|plane);
 
 		    // 1
 		    plane = ((tiles[y] & 0x4000)>>13) | ((tiles[y] & 0x0040)>>6) | ((tiles[y+8] & 0x4000)>>11) | ((tiles[y+8] & 0x0040)>>4);
-		    if(plane != 0) this.bitmap[pbmp_addr + 1] = palette|plane;
+		    if(plane != 0) this.bitmap[pbmp_addr + 1] = (palette|plane);
 		    
 		    // 2
 		    plane = ((tiles[y] & 0x2000)>>12) | ((tiles[y] & 0x0020)>>5) | ((tiles[y+8] & 0x2000)>>10) | ((tiles[y+8] & 0x0020)>>3);
@@ -833,7 +852,7 @@ export class GPU {
 		}
 		pbmp_addr = pbmp_addr - this.mwr_size_w*8*8 + 8;
 	    }
-	    //pbmp_addr = pbmp_addr - this.mwr_size_w * 8 + GPU.PALBITMAP_W * 8;
+
 	    pbmp_addr = pbmp_addr - this.mwr_size_w*8 + this.mwr_size_w*8*8;
 	    
 	}
@@ -852,7 +871,7 @@ export class GPU {
 	    
 	    this.sprites[i].yflip = (v & 0x8000) >> 15;
 	    this.sprites[i].ysize = (v & 0x3000) >> 12;
-	       if(this.sprites[i].ysize == 2) this.sprites[i].ysize = 3;
+	    //	       if(this.sprites[i].ysize == 2) this.sprites[i].ysize = 3;
 	    this.sprites[i].xflip = (v & 0x0800) >> 11;
 	    this.sprites[i].xsize = (v & 0x0100) >> 8;
 	    this.sprites[i].fg = (v & 0x0080) >> 7;
@@ -1399,6 +1418,7 @@ export class CPU { // HuC6280
 
 
     imm:boolean;
+    profile:number[];
 
     regdump_get_text():string {
 	return ("Regs : A=" + Util.hex(this.A) +
@@ -1453,6 +1473,11 @@ export class CPU { // HuC6280
 	this.infinite_addr = new Array<number>(2);
 	this.infinite_addr.fill(0);
 	this.infinite_check_index = 0;
+
+
+	this.profile =new Array<number>(256);
+	this.profile.fill(0);
+	
     }
 
     attach(mem:MemoryController) {
@@ -1468,37 +1493,44 @@ export class CPU { // HuC6280
 	this.clockspeed = CPU.CLOCKSPEED_HIGH;
     }
 
-    flagC0():void {this.P = this.P & (~0x01);}
-    flagC1():void {this.P = this.P | 0x01;}
+    flagC0():void {this.P = (this.P & (~0x01))&0xff;}
+    flagC1():void {this.P = (this.P | 0x01);}
     flagC():number {return this.P&0x01;}
 
-    flagZ0():void {this.P = this.P & (~0x02);}
-    flagZ1():void {this.P = this.P | 0x02;}
+    flagZ0():void {this.P = (this.P & (~0x02))&0xff;}
+    flagZ1():void {this.P = (this.P | 0x02);}
     flagZ():number {return (this.P&0x02)>>1;}
 
-    flagI0():void {this.P = this.P & (~0x04);}
-    flagI1():void {this.P = this.P | 0x04;}
+    flagI0():void {this.P = (this.P & (~0x04))&0xff;}
+    flagI1():void {this.P = (this.P | 0x04);}
     flagI():number {return (this.P&0x04)>>2;}
     
-    flagD0():void {this.P = this.P & (~0x08);}
-    flagD1():void {this.P = this.P | 0x08;}
+    flagD0():void {this.P = (this.P & (~0x08))&0xff;}
+    flagD1():void {this.P = (this.P | 0x08);}
     flagD():number {return (this.P&0x08)>>3;}
     
-    flagB0():void {this.P = this.P & (~0x10);}
-    flagB1():void {this.P = this.P | 0x10;}
+    flagB0():void {this.P = (this.P & (~0x10))&0xff;}
+    flagB1():void {this.P = (this.P | 0x10);}
     flagB():number {return (this.P&0x10)>>4;}
     
-    flagT0():void {this.P = this.P & (~0x20);}
-    flagT1():void {this.P = this.P | 0x20;}
+    flagT0():void {this.P = (this.P & (~0x20))&0xff;}
+    flagT1():void {this.P = (this.P | 0x20);}
     flagT():number {return (this.P&0x20)>>5;}
     
-    flagV0():void {this.P = this.P & (~0x40);}
-    flagV1():void {this.P = this.P | 0x40;}
+    flagV0():void {this.P = (this.P & (~0x40))&0xff;}
+    flagV1():void {this.P = (this.P | 0x40);}
     flagV():number {return (this.P&0x40)>>6;}
     
-    flagN0():void {this.P = this.P & (~0x80);}
-    flagN1():void {this.P = this.P | 0x80;}
+    flagN0():void {this.P = (this.P & (~0x80))&0xff;}
+    flagN1():void {this.P = (this.P | 0x80);}
     flagN():number {return (this.P&0x80)>>7;}
+
+    show_profile() {
+	for(let i = 0; i < 256; i ++) {
+	    console.log(Util.hex(i,2) + ":"+this.profile[i]);
+	    if(i%16==15) console.log("\n");
+	}
+    }
 
     cycle(n:number):void {
 	this.cycleleft += n;
@@ -1517,12 +1549,13 @@ export class CPU { // HuC6280
 
     interrupt(vector:number) {
 	this.infiniteloop = false;
+
 	this.push((this.PC & 0xff00) >> 8);
 	this.push((this.PC & 0x00ff));
 	this.push(this.P);
 	let ll = this.Mem.read(vector);
 	let hh = this.Mem.read(vector + 1);
-	this.PC = (hh<<8) | ll;
+	this.PC = ((hh<<8) | ll);
 	this.flagT0();
 	this.flagB0();
 	this.flagD0();
@@ -1624,6 +1657,8 @@ export class CPU { // HuC6280
 	this.decode = "undecoded";
 	this.decode_raw = Util.hex(this.current_opcode) + " ";
 	this.PC = (this.PC + 1) & 0xffff;
+
+	this.profile[this.current_opcode] ++;
 	
 	switch(this.current_opcode) {
 
@@ -2000,8 +2035,8 @@ export class CPU { // HuC6280
 	}
 
 	if(CPU.debug){
-	    //	    	    console.log(this.regdump_get_text());
-	    //	    	    console.log(this.Mem.memdump_get_text(0x2000, 256));
+	    //	    console.log(this.regdump_get_text());
+	    //	    console.log(this.Mem.memdump_get_text(0x2100, 256));
 	}
 
 
@@ -2017,9 +2052,7 @@ export class CPU { // HuC6280
     
     read_work():void {
 	let value = this.Mem.read(this.work_addr);
-	if(this.imm){
-	    this.decode_raw += Util.hex(value) + " ";
-	}
+
 	this.work_value = value;
 	
 	if(this.imm) {
@@ -2028,36 +2061,7 @@ export class CPU { // HuC6280
 
 	this.imm = false;
     }
-    read_work2():void {
-	let order = 0;
-	let value = 0;
-	for(let i = 0; i < 2; i ++) {
-	    let v = this.Mem.read(this.work_addr + i);
-	    if(this.imm){
-		this.decode_raw += Util.hex(v) + " ";
-	    }
-	    value = value + v * Math.pow(256, order);
-	    order = order + 1;
-	}
-	this.work_value = value;
-	
-	if(this.imm) {
-	    this.decode += "#" + Util.hex(value, 4);
-	}
-
-	this.imm = false;
-    }
     
-    /*
-    write_work(n:number=1):void {
-	let value = this.work_value;
-	for(let i = 0; i < n; i ++) {
-	    let v = value & 0xff;
-	    value = Math.floor(value / 256);
-	    this.Mem.write(this.work_addr, v);
-	}
-    }
-    */
     write_work():void {
 	let value = this.work_value;
 	this.Mem.write(this.work_addr, value);
@@ -2076,7 +2080,7 @@ export class CPU { // HuC6280
 	let ll = this.Mem.read(this.PC);
 	let hh = this.Mem.read(this.PC + 1);
 	this.decode_raw += Util.hex(ll) + " " + Util.hex(hh) + " ";
-	this.work_addr = (hh<<8)|ll;
+	this.work_addr = ((hh<<8)|ll);
 	this.PC = (this.PC + 2) & 0xffff;
 	this.decode = "imm " + Util.hex(this.work_addr,4);
 	//	this.imm = true;
@@ -2118,7 +2122,7 @@ export class CPU { // HuC6280
 	let addr = CPU.ZEROPAGEBASE + zz;
 	let ll = this.Mem.read(addr);
 	let hh = this.Mem.read(addr+1);
-	this.work_addr = (hh<<8)|ll;
+	this.work_addr = ((hh<<8)|ll);
 	this.decode = "(z"+Util.hex(zz)+")";
     }
     
@@ -2129,7 +2133,7 @@ export class CPU { // HuC6280
 	this.decode_raw += Util.hex(zz) + " ";
 	let ll = this.Mem.read(addr);
 	let hh = this.Mem.read(addr+1);
-	this.work_addr = (hh<<8)|ll;
+	this.work_addr = ((hh<<8)|ll);
 	this.decode = "(z"+Util.hex(zz)+",X)";
     }
 
@@ -2142,9 +2146,6 @@ export class CPU { // HuC6280
 	let hh = this.Mem.read(addr+1);
 	this.work_addr = ((hh<<8)|ll) +this.Y;
 	this.decode = "(z"+Util.hex(zz)+"),Y";
-
-	//	if(CPU.debug)console.log("work:"+Util.hex(this.work_addr,4));
-	
     }
     
     addr_abs():void {
@@ -2154,7 +2155,7 @@ export class CPU { // HuC6280
 	let hh = this.Mem.read(this.PC);
 	this.decode_raw += Util.hex(hh) + " ";
 	this.PC = (this.PC + 1) & 0xffff;
-	this.work_addr = (hh<<8)|ll;
+	this.work_addr = ((hh<<8)|ll);
 	this.decode = "$" + Util.hex(this.work_addr, 4);
     }
     
@@ -2216,7 +2217,7 @@ export class CPU { // HuC6280
 	let rr = this.Mem.read(this.PC);
 	this.PC = (this.PC + 1) & 0xffff;
 	this.decode_raw += Util.hex(rr) + " ";
-	let signed_rr = rr > 128 ? rr - 256 : rr;
+	let signed_rr = rr >= 128 ? rr - 256 : rr;
 	this.work_rr = signed_rr;
 	this.decode += "r"+this.work_rr;
     }
@@ -2260,18 +2261,31 @@ export class CPU { // HuC6280
     ADC_aby():void {this.addr_aby(); this.ADC(); this.cycle(5);}
     ADC():void {
 	this.read_work();
-
-	let result = this.A + this.work_value + (this.flagC() == 0 ? 0 : 1);
 	
-	this.flagT0();
+	let zaddr = 0;
+	let v;
+	if(this.flagT() == 0) {
+	    v = this.A;
+	} else {
+	    zaddr = CPU.ZEROPAGEBASE + this.X;
+	    v = this.Mem.read(zaddr);
+	}
+	
+	let result = v + this.work_value + (this.flagC() == 0?0:1);
+	
 	if((result & 0xff) == 0) this.flagZ1(); else this.flagZ0();
 	if(result > 255) this.flagC1(); else this.flagC0();
-	if((result >= 128 && result < 256) ||
-	   (result >= 128+256)) this.flagN1(); else this.flagN0();
+
+	if((result & 0x80)!=0) this.flagN1(); else this.flagN0();
 	if(result >= 128) this.flagV1(); else this.flagV0();
 	
-	this.A = (result & 0xff);
-
+	if(this.flagT() == 0){ 
+	    this.A = (result & 0xff);
+	} else {
+	    this.Mem.write(zaddr, result & 0xff);
+	}
+	this.flagT0();
+	
 	this.decode = "ADC " + this.decode;
     }
 
@@ -2287,13 +2301,28 @@ export class CPU { // HuC6280
     AND_aby():void {this.addr_aby(); this.AND(); this.cycle(5);}
     AND():void {
 	this.read_work();
-	let result = (this.A & this.work_value);
 
-	this.flagT0();
+	let zaddr = 0;
+	let v;
+	if(this.flagT() == 0) {
+	    v = this.A;
+	} else {
+	    zaddr = CPU.ZEROPAGEBASE + this.X;
+	    v = this.Mem.read(zaddr);
+	}
+	
+	let result = (v & this.work_value);
+
 	if(result == 0) this.flagZ1(); else this.flagZ0();
 	if((result & 0x80) != 0) this.flagN1(); else this.flagN0();
 
-	this.A = result;
+	if(this.flagT() == 0){ 
+	    this.A = (result & 0xff);
+	} else {
+	    this.Mem.write(zaddr, result & 0xff);
+	}
+	this.flagT0();
+
 	this.decode = "AND " + this.decode;
     }
 
@@ -2303,11 +2332,9 @@ export class CPU { // HuC6280
     ASL_abx():void {this.addr_abx(); this.read_work(); this.ASL(); this.write_work(); this.cycle(7);}
     ASL_acc():void {this.store_work(this.A); this.ASL(); this.A = this.work_value; this.cycle(2);}
     ASL():void {
-
 	let result = (this.work_value << 1);
-	
 	this.flagT0();
-	if(result == 0) this.flagZ1(); else this.flagZ0();
+	if((result&0xff) == 0) this.flagZ1(); else this.flagZ0();
 	if((result & 0x80) != 0) this.flagN1(); else this.flagN0();
 	if(result > 255) this.flagC1(); else this.flagC0();
 
@@ -2316,11 +2343,12 @@ export class CPU { // HuC6280
     }
 
     BBR(i:number):void {
-	let test = 1 << i;
+	let test = (1 << i);
 	this.addr_zp();
 	this.read_work();
+	let v = this.work_value;
 	this.read_rr();
-	if((this.work_value & test) == 0) {
+	if((v & test) == 0) {
 	    this.PC = (this.PC + this.work_rr) & 0xffff;
 	}
 	this.flagT0();
@@ -2340,11 +2368,12 @@ export class CPU { // HuC6280
     }
 
     BBS(i:number):void {
-	let test = 1 << i;
+	let test = (1 << i);
 	this.addr_zp();
 	this.read_work();
+	let v = this.work_value;
 	this.read_rr();
-	if((this.work_value & test) != 0) {
+	if((v & test) != 0) {
 	    this.PC = ((this.PC + this.work_rr) & 0xffff);
 	}
 	this.flagT0();
@@ -2410,7 +2439,8 @@ export class CPU { // HuC6280
 	}
 	this.flagT0();
 	this.decode = "BNE " + this.decode;
-	this.cycle(2);
+	//this.cycle(2);
+	this.cycleleft += 2;
     }
     
     BPL():void {
@@ -2457,9 +2487,7 @@ export class CPU { // HuC6280
 	let paddr = this.PC - 1;
 	this.push((paddr & 0xff00) >> 8);
 	this.push((paddr & 0x00ff));
-
-	//	this.PC = (paddr + 2 + this.work_rr) & 0xffff;
-	this.PC = (paddr + 1 + this.work_rr) & 0xffff;
+	this.PC = (this.PC + this.work_rr) & 0xffff;
 	this.flagT0();
 	this.decode = "BSR";
 	this.cycle(8);
@@ -2639,13 +2667,29 @@ export class CPU { // HuC6280
     EOR_aby():void {this.addr_aby(); this.EOR(); this.cycle(5);}
     EOR():void {
 	this.read_work();
-	let result = (this.A ^ this.work_value);
+
+	let zaddr = 0;
+	let v;
+	if(this.flagT() == 0) {
+	    v = this.A;
+	} else {
+	    zaddr = CPU.ZEROPAGEBASE + this.X;
+	    v = this.Mem.read(zaddr);
+	}
 	
-	this.flagT0();
+	let result = (v ^ this.work_value);
+	
 	if(result == 0) this.flagZ1(); else this.flagZ0();
 	if((result & 0x80) != 0) this.flagN1(); else this.flagN0();
 	
-	this.A = (result & 0xff);
+	if(this.flagT() == 0){ 
+	    this.A = (result & 0xff);
+	} else {
+	    this.Mem.write(zaddr, result & 0xff);
+	}
+	this.flagT0();
+
+	
 	this.decode = "EOR " + this.decode;
     }
 
@@ -2773,14 +2817,14 @@ export class CPU { // HuC6280
     LSR_zpx():void {this.addr_zpx(); this.read_work(); this.LSR(); this.write_work(); this.cycle(6);}
     LSR_abs():void {this.addr_abs(); this.read_work(); this.LSR(); this.write_work(); this.cycle(7);}
     LSR_abx():void {this.addr_abx(); this.read_work(); this.LSR(); this.write_work(); this.cycle(7);}
-    LSR_acc():void {this.store_work(this.A); this.LSR(); this.A = this.work_value;; this.cycle(2);}
+    LSR_acc():void {this.store_work(this.A); this.LSR(); this.A = this.work_value; this.cycle(2);}
     LSR():void {
-	let result = (this.work_value >> 1);
+	let result = (this.work_value >>> 1);
 	
 	this.flagT0();
 	if((this.work_value & 0x01) != 0) this.flagC1(); else this.flagC0();
-	if(result == 0) this.flagZ1(); else this.flagZ0();
-	if((result & 0x80) != 0) this.flagN1(); else this.flagN0();
+	if((result&0xff) == 0) this.flagZ1(); else this.flagZ0();
+	this.flagN0();
 	this.work_value = (result & 0xff);
 	this.decode = "LSR " + this.decode;
     }
@@ -2796,13 +2840,28 @@ export class CPU { // HuC6280
     ORA_aby():void {this.addr_aby(); this.ORA(); this.cycle(5);}
     ORA():void {
 	this.read_work();
-	let result = (this.A | this.work_value);
 
-	this.flagT0();
+	let zaddr = 0;
+	let v;
+	if(this.flagT() == 0) {
+	    v = this.A;
+	} else {
+	    zaddr = CPU.ZEROPAGEBASE + this.X;
+	    v = this.Mem.read(zaddr);
+	}
+	
+	let result = (v | this.work_value);
+
 	if(result == 0) this.flagZ1(); else this.flagZ0();
 	if((result & 0x80) != 0) this.flagN1(); else this.flagN0();
 	
-	this.A = (result & 0xff);
+	if(this.flagT() == 0){ 
+	    this.A = (result & 0xff);
+	} else {
+	    this.Mem.write(zaddr, result & 0xff);
+	}
+	this.flagT0();
+
 	this.decode = "ORA " + this.decode;
     }
 
@@ -2834,6 +2893,8 @@ export class CPU { // HuC6280
     }
     PLA():void {
 	this.A = this.pull();
+	if((this.A&0xff) == 0) this.flagZ1(); else this.flagZ0();
+	if((this.A & 0x80) != 0) this.flagN1(); else this.flagN0();
 	this.decode = "PLA";
 	this.cycle(4);
     }
@@ -2844,11 +2905,15 @@ export class CPU { // HuC6280
     }
     PLX():void {
 	this.X = this.pull();
+	if((this.X&0xff) == 0) this.flagZ1(); else this.flagZ0();
+	if((this.X & 0x80) != 0) this.flagN1(); else this.flagN0();
 	this.decode = "PLX";
 	this.cycle(4);
     }
     PLY():void {
 	this.Y = this.pull();
+	if((this.Y&0xff) == 0) this.flagZ1(); else this.flagZ0();
+	if((this.Y & 0x80) != 0) this.flagN1(); else this.flagN0();
 	this.decode = "PLY";
 	this.cycle(4);
     }
@@ -2866,7 +2931,7 @@ export class CPU { // HuC6280
 
 	this.flagT0();
 	if(carry != 0) this.flagC1(); else this.flagC0();
-	if(result == 0) this.flagZ1(); else this.flagZ0();
+	if((result&0xff) == 0) this.flagZ1(); else this.flagZ0();
 	if((result & 0x80) != 0) this.flagN1(); else this.flagN0();
 	
 	this.work_value = (result & 0xff);
@@ -2874,7 +2939,7 @@ export class CPU { // HuC6280
     }
 
     RMB(i:number):void {
-	let v = ~(1 << i);
+	let v = (~(1 << i))&0xff;
 	
 	this.addr_zp();
 	this.read_work();
@@ -2896,11 +2961,11 @@ export class CPU { // HuC6280
     ROR():void {
 	let msb = this.flagC() == 0 ? 0 : 0x80;
 	let lsb = (this.work_value & 0x01);
-	let result = (msb | (this.work_value >> 1));
+	let result = (msb | (this.work_value >>> 1));
 
 	this.flagT0();
 	if(lsb != 0) this.flagC1(); else this.flagC0();
-	if(result == 0) this.flagZ1(); else this.flagZ0();
+	if((result&0xff) == 0) this.flagZ1(); else this.flagZ0();
 	if((result & 0x80) != 0) this.flagN1(); else this.flagN0();
 	this.work_value = (result & 0xff);
 	this.decode = "ROR" + this.decode;
@@ -2962,10 +3027,9 @@ export class CPU { // HuC6280
 
 	this.flagT0();
 	if(result < 0) this.flagC0(); else this.flagC1();
-	if(result == 0) this.flagZ1(); else this.flagZ0();
+	if(((result+256)&0xff) == 0) this.flagZ1(); else this.flagZ0();
 	if(((result+256)&0x80) != 0) this.flagN1(); else this.flagN0();
-	if(result < -128
-	   ||result >= 128) this.flagV1(); else this.flagV0();
+	if(result < -128 ||result >= 128) this.flagV1(); else this.flagV0();
 	
 	this.A = ((result + 256) & 0xff);
 	
@@ -3021,7 +3085,7 @@ export class CPU { // HuC6280
 
 	    
     SMB(i:number):void {
-	let v = 1 << i;
+	let v = (1 << i);
 	
 	this.addr_zp();
 	this.read_work();
@@ -3084,6 +3148,7 @@ export class CPU { // HuC6280
 	let src = this.read_direct(2);
 	let dest = this.read_direct(2);
 	let len = this.read_direct(2);
+	if(len == 0) len = 65536;
 	this.decode = "TAI " +
 	    "$"+Util.hex(src,4) +
 	    " $"+Util.hex(dest,4) +
@@ -3114,7 +3179,7 @@ export class CPU { // HuC6280
 	    if((this.work_value & test) != 0) {
 		this.Mem.MPR[i] = this.A;
 	    }
-	    test = test << 1;
+	    test = (test << 1);
 	}
 	this.decode = "TAM " + this.decode;
 	this.flagT0();
@@ -3143,6 +3208,7 @@ export class CPU { // HuC6280
 	let src = this.read_direct(2);
 	let dest = this.read_direct(2);
 	let len = this.read_direct(2);
+	if(len == 0) len = 65536;
 	this.decode = "TIA " +
 	    "$"+Util.hex(src,4) +
 	    " $"+Util.hex(dest,4) +
@@ -3160,6 +3226,7 @@ export class CPU { // HuC6280
 	let src = this.read_direct(2);
 	let dest = this.read_direct(2);
 	let len = this.read_direct(2);
+	if(len == 0) len = 65536;
 	this.decode = "TDD " +
 	    "$"+Util.hex(src,4) +
 	    " $"+Util.hex(dest,4) +
@@ -3178,6 +3245,7 @@ export class CPU { // HuC6280
 	let src = this.read_direct(2);
 	let dest = this.read_direct(2);
 	let len = this.read_direct(2);
+	if(len == 0) len = 65536;
 	this.decode = "TIN " +
 	    "$"+Util.hex(src,4) +
 	    " $"+Util.hex(dest,4) +
@@ -3195,6 +3263,7 @@ export class CPU { // HuC6280
 	let src = this.read_direct(2);
 	let dest = this.read_direct(2);
 	let len = this.read_direct(2);
+	if(len == 0) len = 65536;
 	this.decode = "TII " +
 	    "$"+Util.hex(src,4) +
 	    " $"+Util.hex(dest,4) +
@@ -3217,7 +3286,7 @@ export class CPU { // HuC6280
 	    if((this.work_value & test) != 0) {
 		this.A = this.Mem.MPR[i];
 	    }
-	    test = test << 1;
+	    test = (test << 1);
 	}
 	this.decode = "TMA " + this.decode;
 	this.flagT0();
@@ -3228,7 +3297,7 @@ export class CPU { // HuC6280
     TRB_abs():void {this.addr_abs(); this.TRB(); this.cycle(7);}
     TRB():void {
 	this.read_work();
-	let result = (this.work_value & (~this.A));
+	let result = ((this.work_value & (~this.A)))&0xff;
 	if((this.work_value & 0x80) != 0) this.flagN1(); else this.flagN0();
 	if((this.work_value & 0x40) != 0) this.flagV1(); else this.flagV0();
 	this.flagT0();
@@ -3269,8 +3338,8 @@ export class CPU { // HuC6280
     
     TSX():void {
 	this.X = this.SP;
-	if(this.SP == 0){this.flagZ1();} else {this.flagZ0();}
-	if((this.SP & 0x80) != 0){this.flagN1();} else {this.flagN0();}
+	if(this.X == 0){this.flagZ1();} else {this.flagZ0();}
+	if((this.X & 0x80) != 0){this.flagN1();} else {this.flagN0();}
 	this.flagT0();
 	this.decode = "TSX";
 	this.cycle(2);
